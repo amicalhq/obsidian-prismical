@@ -1,0 +1,34 @@
+node_modules/
+dist/
+coverage/
+*.log
+.DS_Store
+
+# Credentials and local data
+.env
+.env.*
+*.pem
+*.key
+*.p12
+*.pfx
+.npmrc
+.obsidian/
+tmp/
+
+# Local assistant configuration and skills (at any depth)
+[Aa][Gg][Ee][Nn][Tt][Ss].[Mm][Dd]
+[Cc][Ll][Aa][Uu][Dd][Ee].[Mm][Dd]
+CLAUDE.local.md
+.agents/
+.agent/
+.claude/
+.codex/
+.cursor/
+.copilot/
+.gemini/
+skills/
+.skills/
+.cursorrules
+.github/copilot-instructions.md
+.github/instructions/
+.github/prompts/

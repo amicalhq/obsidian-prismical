@@ -1,0 +1,27 @@
+{
+  "name": "prismical-sync",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "build": "node build.mjs",
+    "type:check": "tsc --noEmit",
+    "test": "vitest run"
+  },
+  "dependencies": {
+    "node-diff3": "3.2.0"
+  },
+  "devDependencies": {
+    "obsidian": "1.13.1",
+    "esbuild": "^0.25.0",
+    "typescript": "5.8.3",
+    "vitest": "4.1.11",
+    "fake-indexeddb": "^6.2.0"
+  },
+  "license": "MIT",
+  "description": "Two-way note-body sync between Prismical and Obsidian.",
+  "engines": {
+    "node": ">=22.14.0",
+    "npm": ">=11"
+  }
+}
