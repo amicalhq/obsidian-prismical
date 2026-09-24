@@ -262,3 +262,34 @@ it('does not retry a rejected upload until local content or remote revision chan
   await syncNote('n', s.ports);
   expect(s.ports.putRemote).toHaveBeenCalledTimes(3);
 });
+
+
+it('pulls successive remote edits despite a rejected local upload', async () => {
+  const s = setup('LOCAL\nb\nc', 'a\nb\nREMOTE', { base: 'a\nb\nc', path: 'note.md' });
+  s.ports.putRemote = vi.fn(async () => { throw new ApiError(422, 'Unsupported content'); });
+  await syncNote('n', s.ports);
+  expect(s.local().body).toBe('LOCAL\nb\nREMOTE');
+  expect(s.state().base).toBe('a\nb\nREMOTE');
+  expect(s.state().blockedPush?.local).toBe(s.local().body);
+  await syncNote('n', s.ports);
+  expect(s.ports.putRemote).toHaveBeenCalledTimes(1);
+  s.remote().body = 'a\nb\nREMOTE AGAIN'; s.remote().sync_revision = '2';
+  await syncNote('n', s.ports);
+  expect(s.local().body).toBe('LOCAL\nb\nREMOTE AGAIN');
+  expect(s.state().base).toBe(s.remote().body);
+  await syncNote('n', s.ports);
+  expect(s.ports.putRemote).toHaveBeenCalledTimes(2);
+});
+
+it('does not overwrite typing during a rejected upload or advance its baseline', async () => {
+  const s = setup('LOCAL\nb\nc', 'a\nb\nREMOTE', { base: 'a\nb\nc', path: 'note.md' });
+  s.ports.putRemote = vi.fn(async () => {
+    s.edit('NEW TYPING\nb\nc');
+    throw new ApiError(422, 'Unsupported content');
+  });
+  expect(await syncNote('n', s.ports)).toBe('Local edit pending');
+  expect(s.local().body).toBe('NEW TYPING\nb\nc');
+  expect(s.state().base).toBe('a\nb\nc');
+  expect(s.state().pending).toBeUndefined();
+  expect(s.state().blockedPush).toBeUndefined();
+});

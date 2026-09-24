@@ -168,9 +168,14 @@ export async function syncNote(id: string, ports: SyncPorts): Promise<string> {
   } catch (error) {
     if (!(error instanceof ApiError) || error.status !== 422) throw error;
     const reason = `Upload blocked: ${error.message}. Edit the note before retrying.`;
+    // The rejected push must not prevent independent remote edits from being pulled.
+    // Clear the definite rejection's pending write even if newer typing blocks replacement.
+    await ports.save(id, { ...state, pending: undefined });
+    if (!ports.active()) return 'Paused';
+    if (!(await ports.replaceLocal(id, local.body, target))) return 'Local edit pending';
     await ports.save(id, {
-      ...state, path: local.path, pending: undefined,
-      blockedPush: { local: local.body, revision: remote.sync_revision, reason },
+      base: remote.body, path: local.path,
+      blockedPush: { local: target, revision: remote.sync_revision, reason },
     });
     return reason;
   }
