@@ -200,18 +200,22 @@ export default class PrismicalSync extends Plugin {
     const unindexed = new Map<string, string>();
     const matches = async (id: string): Promise<TFile[]> => {
       const found: TFile[] = [];
+      const knownPath = (await store.load(id)).path;
       for (const file of this.app.vault.getMarkdownFiles()) {
         const cache = this.app.metadataCache.getFileCache(file);
         const cached = cache?.frontmatter;
-        if (cache && cached?.prismical_note_id !== id) continue;
-        const text = !cache && unindexed.has(file.path)
+        const knownFile = file.path === knownPath;
+        const unparsedProperties = !cached && cache?.frontmatterPosition;
+        if (cache && cached?.prismical_note_id !== id && !knownFile && !unparsedProperties) continue;
+        const text = !knownFile && !cache && unindexed.has(file.path)
           ? unindexed.get(file.path)! : await this.app.vault.read(file);
         if (!cache) unindexed.set(file.path, text);
         let meta;
         try {
           meta = splitFile(text).meta;
         } catch (error) {
-          if (cached?.prismical_note_id === id || text.includes(id)) throw error;
+          if (knownFile || cached?.prismical_note_id === id || text.includes(id))
+            throw new Error('Linked note properties could not be parsed; repair the YAML to resume sync');
           continue;
         }
         if (
@@ -242,10 +246,18 @@ export default class PrismicalSync extends Plugin {
       save: (id, state) => store.save(id, state),
       getLocal: async id => {
         const [file] = await matches(id);
-        if (!file) return null;
+        if (!file) {
+          const state = await store.load(id);
+          if (state.path && this.app.vault.getAbstractFileByPath(state.path))
+            throw new Error('Linked file still exists but its identity properties are missing or changed; repair them to resume sync');
+          return null;
+        }
         const text = await this.app.vault.read(file);
         if (this.hasUnsavedEditor(file, text)) throw new Error('Local edit pending');
-        return { path: file.path, body: splitFile(text).body };
+        const parsed = splitFile(text);
+        if (parsed.meta.prismical_note_id !== id || parsed.meta.prismical_org_id !== who.org.id || parsed.meta.prismical_api !== api)
+          throw new Error('Linked note properties changed during sync; retry after repairing them');
+        return { path: file.path, body: parsed.body };
       },
       createLocal: async note => {
         if (!active()) throw new Error('Sync is paused');

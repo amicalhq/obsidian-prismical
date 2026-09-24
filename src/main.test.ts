@@ -1,6 +1,7 @@
 import 'fake-indexeddb/auto';
 import { afterEach, expect, it, vi } from 'vitest';
 import { MarkdownView, requestUrl, TFile } from 'obsidian';
+import { syncNote, syncNotes } from './engine';
 import PrismicalSync, { safeTitle, splitFile } from './main';
 
 function fileAt(path: string): TFile {
@@ -139,4 +140,78 @@ it('locks review initialization against background sync and allows paused inspec
   s.plugin.settings.enabled = false;
   vi.mocked(requestUrl).mockResolvedValue({ status: 200, headers: {}, text: JSON.stringify({ org_user_id: 'user', org: { id: 'org' } }) } as any);
   await s.plugin.review(); expect(requestUrl).toHaveBeenCalledTimes(2);
+});
+
+
+it.each([{}, { frontmatterPosition: { start: { line: 0 }, end: { line: 5 } } }])(
+  'retains a malformed linked file and resumes after repair with cache %j', async cache => {
+    const s = setup(); const file = s.add('one'); const original = s.files.get(file)!;
+    s.files.set(file, original.replace('---\nbase', 'tags: [foo\n---\nbase'));
+    s.caches.set(file, cache);
+    const ports = await s.ports();
+    ports.getRemote = async () => ({ id: 'one', title: 'Note', body: 'remote', sync_revision: 'a'.repeat(64), sync_problem: null, can_write: true, trashed_at: null });
+    const baseline = { base: 'base', path: file.path };
+    await ports.save('one', baseline);
+    await expect(syncNote('one', ports)).rejects.toThrow('repair the YAML');
+    expect(await ports.load('one')).toEqual(baseline);
+    s.files.set(file, original);
+    // The cache may still be missing parsed properties immediately after repair.
+    expect(await syncNote('one', ports)).toBe('Up to date');
+    expect((await ports.load('one')).base).toBe('remote');
+    expect(s.files.get(file)).toBe(original.replace('---\nbase', '---\nremote'));
+  }
+);
+
+it.each(['ordinary text', '---\nprismical_note_id: "other"\n---\nbase'])(
+  'does not infer deletion from missing or changed identity properties: %s', async text => {
+    const s = setup(); const file = s.add('one'); s.files.set(file, text); s.caches.set(file, {});
+    const ports = await s.ports();
+    await ports.save('one', { base: 'base', path: file.path });
+    await expect(ports.getLocal('one')).rejects.toThrow('still exists');
+    expect((await ports.load('one')).excluded).toBeUndefined();
+  }
+);
+
+it('still disconnects after confirmed local removal', async () => {
+  const s = setup(); const file = s.add('one'); s.files.delete(file);
+  const ports = await s.ports();
+  await ports.save('one', { base: 'base', path: file.path });
+  ports.getRemote = async () => ({ id: 'one', title: 'Note', body: 'base', sync_revision: 'a'.repeat(64), sync_problem: null, can_write: true, trashed_at: null });
+  expect(await syncNote('one', ports)).toBe('Disconnected after local removal');
+});
+
+it('finds a moved linked note instead of disconnecting the old path', async () => {
+  const s = setup(); const file = s.add('one'); file.path = 'moved.md';
+  const ports = await s.ports(); await ports.save('one', { base: 'base', path: 'one.md' });
+  expect(await ports.getLocal('one')).toEqual({ path: 'moved.md', body: 'base' });
+});
+
+it('continues syncing healthy notes when another linked file has malformed YAML', async () => {
+  const s = setup(); const broken = s.add('one'); const healthy = s.add('two');
+  s.files.set(broken, s.files.get(broken)!.replace('---\nbase', 'tags: [foo\n---\nbase'));
+  s.caches.set(broken, {});
+  const ports = await s.ports();
+  await ports.save('one', { base: 'base', path: broken.path });
+  await ports.save('two', { base: 'base', path: healthy.path });
+  ports.getRemote = async (id: string) => ({ id, title: 'Note', body: 'remote', sync_revision: 'a'.repeat(64), sync_problem: null, can_write: true, trashed_at: null });
+  const report = vi.fn(); await syncNotes(['one', 'two'], ports, report);
+  expect(report).toHaveBeenCalledWith('one', expect.stringContaining('repair the YAML'));
+  expect(report).toHaveBeenCalledWith('two', 'Up to date');
+  expect((await ports.load('one')).excluded).toBeUndefined();
+});
+
+it('rejects a moved malformed linked file identified by a frontmatter position', async () => {
+  const s = setup(); const file = s.add('one'); file.path = 'moved.md';
+  s.files.set(file, s.files.get(file)!.replace('---\nbase', 'tags: [foo\n---\nbase'));
+  s.caches.set(file, { frontmatterPosition: { start: { line: 0 }, end: { line: 5 } } });
+  const ports = await s.ports(); await ports.save('one', { base: 'base', path: 'one.md' });
+  await expect(ports.getLocal('one')).rejects.toThrow('repair the YAML');
+  expect((await ports.load('one')).excluded).toBeUndefined();
+});
+
+it('refuses content whose identity changes after discovery', async () => {
+  const s = setup(); const file = s.add('one'); const original = s.files.get(file)!;
+  const ports = await s.ports();
+  s.app.vault.read.mockResolvedValueOnce(original).mockResolvedValueOnce(original.replace('"one"', '"other"'));
+  await expect(ports.getLocal('one')).rejects.toThrow('properties changed during sync');
 });

@@ -23,7 +23,7 @@ For a local build, follow the development commands below. Copy the contents of `
 4. Paste note IDs from Prismical note URLs, separated by commas or newlines, and choose a destination folder.
 5. Enable sync on this device and select **Sync now**.
 
-Use **Review sync status and conflicts** to inspect conflicts or reconnect disconnected notes, including while sync is paused. Enable sync before applying a conflict resolution. Conflict backups are saved in the vault root for easy recovery. Preserve the identity frontmatter; duplicate linked IDs pause that note's sync.
+Use **Review sync status and conflicts** to inspect conflicts or reconnect disconnected notes, including while sync is paused. Enable sync before applying a conflict resolution. Conflict backups are saved in the vault root for easy recovery. Preserve the identity frontmatter; duplicate linked IDs pause that note's sync. Malformed YAML or missing identity properties in an existing linked file pause that note without discarding its baseline. Repair the properties to resume; reconnecting is not necessary.
 
 ## Beta limitations
 
