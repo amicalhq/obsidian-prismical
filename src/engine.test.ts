@@ -247,3 +247,18 @@ it('preserves overlapping typing during an acknowledged merged write as a confli
   expect(s.local().body).toBe('A\nb\nTyping');
   expect(s.state().conflict?.reason).toContain('in flight');
 });
+
+it('does not retry a rejected upload until local content or remote revision changes', async () => {
+  const s = setup('unsupported');
+  s.ports.putRemote = vi.fn(async () => { throw new ApiError(422, 'Unsupported content'); });
+  expect(await syncNote('n', s.ports)).toContain('Upload blocked');
+  expect(await syncNote('n', s.ports)).toContain('Upload blocked');
+  expect(s.ports.putRemote).toHaveBeenCalledTimes(1);
+  expect(s.state().pending).toBeUndefined();
+  s.edit('changed unsupported');
+  await syncNote('n', s.ports);
+  expect(s.ports.putRemote).toHaveBeenCalledTimes(2);
+  s.remote().sync_revision = '3';
+  await syncNote('n', s.ports);
+  expect(s.ports.putRemote).toHaveBeenCalledTimes(3);
+});

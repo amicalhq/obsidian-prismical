@@ -24,6 +24,7 @@ export interface SyncState {
   path?: string;
   pending?: { local: string; target: string; acknowledged?: string };
   conflict?: Conflict;
+  blockedPush?: { local: string; revision: string; reason: string };
   excluded?: boolean;
 }
 export interface SyncPorts {
@@ -130,6 +131,8 @@ export async function syncNote(id: string, ports: SyncPorts): Promise<string> {
     await ports.save(id, { ...state, path: local.path });
   }
   if (state.conflict) return 'Conflict needs review';
+  if (state.blockedPush?.local === local.body && state.blockedPush.revision === remote.sync_revision)
+    return state.blockedPush.reason;
   const target = reconcile(state.base, local.body, remote.body);
   if (target === null) {
     await ports.save(id, {
@@ -159,8 +162,18 @@ export async function syncNote(id: string, ports: SyncPorts): Promise<string> {
   }
   if (!ports.active()) return 'Paused';
   await ports.save(id, { ...state, path: local.path, pending: { local: local.body, target } });
-  const result =
-    target === remote.body ? remote : await ports.putRemote(id, target, remote.sync_revision);
+  let result: RemoteNote;
+  try {
+    result = target === remote.body ? remote : await ports.putRemote(id, target, remote.sync_revision);
+  } catch (error) {
+    if (!(error instanceof ApiError) || error.status !== 422) throw error;
+    const reason = `Upload blocked: ${error.message}. Edit the note before retrying.`;
+    await ports.save(id, {
+      ...state, path: local.path, pending: undefined,
+      blockedPush: { local: local.body, revision: remote.sync_revision, reason },
+    });
+    return reason;
+  }
   await ports.save(id, {
     ...state,
     path: local.path,
