@@ -1,6 +1,7 @@
 import {
   App,
   Modal,
+  MarkdownView,
   Notice,
   Plugin,
   PluginSettingTab,
@@ -36,7 +37,7 @@ const defaults: Settings = {
   folder: 'Prismical',
   enabled: false,
 };
-function splitFile(text: string) {
+export function splitFile(text: string) {
   const match = /^---\r?\n([\s\S]*?)\r?\n---(?:\r?\n|$)/.exec(text);
   const meta = match ? parseYaml(match[1]) : {};
   return {
@@ -59,6 +60,11 @@ function validApi(value: string): string {
   return url.origin;
 }
 
+export function safeTitle(title: string): string {
+  return title.replace(/[\x00-\x1f\x7f\\/:*?"<>|\[\]#^]/g, '-')
+    .replace(/^[. ]+/g, '').slice(0, 80).replace(/[. ]+$/g, '') || 'Note';
+}
+
 export default class PrismicalSync extends Plugin {
   settings = { ...defaults };
   private running = false;
@@ -70,6 +76,27 @@ export default class PrismicalSync extends Plugin {
   private outcomes = new Map<string, string>();
   private retryAt = 0;
   private failures = 0;
+  private lastAutoRun = -Infinity;
+  private settingsTimer?: ReturnType<typeof setTimeout>;
+  private draft: Partial<Settings> = {};
+
+  queueSettings(patch: Partial<Settings>) {
+    Object.assign(this.draft, patch);
+    clearTimeout(this.settingsTimer);
+    this.settingsTimer = setTimeout(() => {
+      Object.assign(this.settings, this.draft);
+      this.draft = {};
+      this.settingsTimer = undefined;
+      void this.configure();
+    }, 600);
+  }
+
+  private hasUnsavedEditor(file: TFile, diskText: string) {
+    return this.app.workspace.getLeavesOfType('markdown').some(({ view }) =>
+      view instanceof MarkdownView && view.file?.path === file.path &&
+      view.getMode() === 'source' && view.editor.getValue() !== diskText
+    );
+  }
 
   async onload() {
     this.settings = { ...defaults, ...(await this.loadData()) };
@@ -92,6 +119,7 @@ export default class PrismicalSync extends Plugin {
     this.app.workspace.onLayoutReady(() => void this.run());
   }
   onunload() {
+    clearTimeout(this.settingsTimer);
     this.stopped = true;
     this.generation++;
     void this.store?.close();
@@ -111,14 +139,15 @@ export default class PrismicalSync extends Plugin {
       throw new Error('Select up to 50 valid note IDs');
     return ids;
   }
-  private async ports(): Promise<SyncPorts> {
+  private async ports(review = false): Promise<SyncPorts> {
     const generation = this.generation;
     const active = () => !this.stopped && this.settings.enabled && generation === this.generation;
     const api = validApi(this.settings.api);
     const key = this.app.secretStorage.getSecret(this.settings.secret);
     if (!key) throw new Error('Choose a Prismical API key in settings');
     const request = async (path: string, body?: unknown): Promise<any> => {
-      if (!active()) throw new Error('Sync is paused');
+      if (this.stopped || generation !== this.generation || (!active() && (!review || body !== undefined)))
+        throw new Error('Sync is paused or settings changed');
       const response = await requestUrl({
         url: `${api}/v1${path}`,
         method: body === undefined ? 'GET' : 'PUT',
@@ -152,7 +181,8 @@ export default class PrismicalSync extends Plugin {
       return data;
     };
     const who = await request('/whoami');
-    if (typeof who.org_user_id !== 'string' || typeof who.org?.id !== 'string')
+    if (this.stopped || generation !== this.generation) throw new Error('Settings changed; retry sync');
+    if (!who || typeof who.org_user_id !== 'string' || typeof who.org?.id !== 'string')
       throw new Error('Invalid account response');
     // Obsidian local storage is scoped to this vault; the marker does not live in synced files.
     let vaultId = this.app.loadLocalStorage('prismical-sync-vault-id') as string | null;
@@ -167,12 +197,16 @@ export default class PrismicalSync extends Plugin {
       this.namespace = namespace;
     }
     const store = this.store!;
+    const unindexed = new Map<string, string>();
     const matches = async (id: string): Promise<TFile[]> => {
       const found: TFile[] = [];
       for (const file of this.app.vault.getMarkdownFiles()) {
-        const cached = this.app.metadataCache.getFileCache(file)?.frontmatter;
-        if (cached && cached.prismical_note_id !== id) continue;
-        const text = await this.app.vault.read(file);
+        const cache = this.app.metadataCache.getFileCache(file);
+        const cached = cache?.frontmatter;
+        if (cache && cached?.prismical_note_id !== id) continue;
+        const text = !cache && unindexed.has(file.path)
+          ? unindexed.get(file.path)! : await this.app.vault.read(file);
+        if (!cache) unindexed.set(file.path, text);
         let meta;
         try {
           meta = splitFile(text).meta;
@@ -208,9 +242,10 @@ export default class PrismicalSync extends Plugin {
       save: (id, state) => store.save(id, state),
       getLocal: async id => {
         const [file] = await matches(id);
-        return file
-          ? { path: file.path, body: splitFile(await this.app.vault.read(file)).body }
-          : null;
+        if (!file) return null;
+        const text = await this.app.vault.read(file);
+        if (this.hasUnsavedEditor(file, text)) throw new Error('Local edit pending');
+        return { path: file.path, body: splitFile(text).body };
       },
       createLocal: async note => {
         if (!active()) throw new Error('Sync is paused');
@@ -223,17 +258,14 @@ export default class PrismicalSync extends Plugin {
           if (!this.app.vault.getAbstractFileByPath(parent))
             await this.app.vault.createFolder(parent);
         }
-        const name =
-          note.title
-            .replace(/[\\/:*?"<>|\[\]#^]/g, '-')
-            .replace(/[. ]+$/g, '')
-            .slice(0, 80) || 'Note';
+        const name = safeTitle(note.title);
         const path = normalizePath(`${folder}/${name} - ${note.id}.md`);
         if (this.app.vault.getAbstractFileByPath(path))
           throw new Error('Import path exists; move the unrelated file first');
         const text = `---\nprismical_note_id: ${JSON.stringify(note.id)}\nprismical_org_id: ${JSON.stringify(who.org.id)}\nprismical_api: ${JSON.stringify(api)}\nprismical_title: ${JSON.stringify(note.title)}\n---\n${note.body}`;
         if (!active()) throw new Error('Sync is paused');
         await this.app.vault.create(path, text);
+        unindexed.set(path, text);
         return { path, body: note.body };
       },
       replaceLocal: async (id, expected, body) => {
@@ -245,6 +277,7 @@ export default class PrismicalSync extends Plugin {
           const parsed = splitFile(text);
           if (
             !active() ||
+            this.hasUnsavedEditor(file, text) ||
             parsed.body !== expected ||
             parsed.meta.prismical_note_id !== id ||
             parsed.meta.prismical_org_id !== who.org.id ||
@@ -252,6 +285,7 @@ export default class PrismicalSync extends Plugin {
           )
             return text;
           applied = true;
+          unindexed.set(file.path, parsed.prefix + body);
           return parsed.prefix + body;
         });
         return applied;
@@ -259,8 +293,9 @@ export default class PrismicalSync extends Plugin {
     };
   }
   async run(manual = false) {
-    if (this.running || this.stopped || !this.settings.enabled) return;
-    if (!manual && Date.now() < this.retryAt) return;
+    if (this.running || this.stopped || !this.settings.enabled || this.settingsTimer) return;
+    if (!manual && (Date.now() < this.retryAt || Date.now() - this.lastAutoRun < 30_000)) return;
+    this.lastAutoRun = Date.now();
     this.running = true;
     this.status.setText('Prismical: syncing');
     try {
@@ -294,8 +329,10 @@ export default class PrismicalSync extends Plugin {
       new Notice('Wait for the current sync to finish');
       return;
     }
+    this.running = true;
+    const generation = this.generation;
     try {
-      const ports = await this.ports();
+      const ports = await this.ports(true);
       const modal = new Modal(this.app);
       modal.setTitle('Prismical sync');
       for (const id of this.ids()) {
@@ -313,11 +350,16 @@ export default class PrismicalSync extends Plugin {
               .setName(choice === 'local' ? 'Use Obsidian version' : 'Use Prismical version')
               .addButton(button =>
                 button.setButtonText('Use this version').onClick(async () => {
-                  if (this.running) return;
+                  if (this.running) {
+                    new Notice('Wait for the current sync to finish');
+                    return;
+                  }
                   this.running = true;
                   let refresh = false;
                   try {
-                    await resolveConflict(id, choice, ports, state.conflict!, async conflict => {
+                    if (generation !== this.generation) throw new Error('Settings changed; reopen review');
+                    const currentPorts = await this.ports();
+                    await resolveConflict(id, choice, currentPorts, state.conflict!, async conflict => {
                       await this.app.vault.create(
                         `Prismical conflict ${id} ${Date.now()}.md`,
                         `# Obsidian version\n\n${conflict.local}\n\n# Prismical version\n\n${conflict.remote}`
@@ -343,16 +385,30 @@ export default class PrismicalSync extends Plugin {
           .setName(state.excluded ? 'Reconnect note' : 'Disconnect note')
           .addButton(button =>
             button.setButtonText(state.excluded ? 'Reconnect' : 'Disconnect').onClick(async () => {
-              if (this.running) return;
-              const current = await ports.load(id);
-              await ports.save(id, state.excluded ? {} : { ...current, excluded: true });
-              modal.close();
+              if (this.running) {
+                new Notice('Wait for the current sync to finish');
+                return;
+              }
+              this.running = true;
+              try {
+                if (generation !== this.generation) throw new Error('Settings changed; reopen review');
+                const currentPorts = await this.ports(true);
+                const current = await currentPorts.load(id);
+                await currentPorts.save(id, state.excluded ? {} : { ...current, excluded: true });
+                modal.close();
+              } catch (error) {
+                new Notice(String(error));
+              } finally {
+                this.running = false;
+              }
             })
           );
       }
       modal.open();
     } catch (error) {
       new Notice(String(error));
+    } finally {
+      this.running = false;
     }
   }
 }
@@ -388,8 +444,7 @@ class SyncSettings extends PluginSettingTab {
       .setDesc('HTTPS origin of the Prismical API')
       .addText(text =>
         text.setValue(this.plugin.settings.api).onChange(async value => {
-          this.plugin.settings.api = value;
-          await this.plugin.configure();
+          this.plugin.queueSettings({ api: value });
         })
       );
     new Setting(this.containerEl)
@@ -399,14 +454,12 @@ class SyncSettings extends PluginSettingTab {
       )
       .addTextArea(text =>
         text.setValue(this.plugin.settings.noteIds).onChange(async value => {
-          this.plugin.settings.noteIds = value;
-          await this.plugin.configure();
+          this.plugin.queueSettings({ noteIds: value });
         })
       );
     new Setting(this.containerEl).setName('Destination folder').addText(text =>
       text.setValue(this.plugin.settings.folder).onChange(async value => {
-        this.plugin.settings.folder = value;
-        await this.plugin.configure();
+        this.plugin.queueSettings({ folder: value });
       })
     );
     new Setting(this.containerEl)

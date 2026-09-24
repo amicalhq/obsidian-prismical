@@ -7,7 +7,7 @@ Desktop beta. Requires Obsidian 1.11.4 or later and a Prismical account with API
 ## Features
 
 - Connect up to 50 existing notes using their Prismical note IDs.
-- Sync manually or every 60 seconds while Obsidian is open; also check on focus and reconnection.
+- Sync manually or every 60 seconds while Obsidian is open; also check on focus and reconnection, with at least 30 seconds between automatic runs. Manual sync bypasses that interval.
 - Merge non-overlapping edits. Review overlapping changes and save both versions before resolving.
 - Retain unsent edits and recover after interrupted writes or restarts.
 - Rename and move linked files within the vault. Local deletion disconnects without deleting the remote note.
@@ -23,13 +23,13 @@ For a local build, follow the development commands below. Copy the contents of `
 4. Paste note IDs from Prismical note URLs, separated by commas or newlines, and choose a destination folder.
 5. Enable sync on this device and select **Sync now**.
 
-Use **Review sync status and conflicts** to resolve conflicts or reconnect disconnected notes. Preserve the identity frontmatter; duplicate linked IDs pause that note's sync.
+Use **Review sync status and conflicts** to inspect conflicts or reconnect disconnected notes, including while sync is paused. Enable sync before applying a conflict resolution. Conflict backups are saved in the vault root for easy recovery. Preserve the identity frontmatter; duplicate linked IDs pause that note's sync.
 
 ## Beta limitations
 
 Enable only one connector device per shared vault. Obsidian must be open. Mobile, tags, title updates, transcripts, attachments, and creation of new Prismical notes from local files are not supported yet.
 
-Ordinary Markdown is supported. Unsupported rich content, Obsidian-specific syntax and reference-style link definitions may block uploads to avoid data loss. Concurrent edits can require manual cleanup; this is periodic synchronization, not a shared live editor. Recovery without a saved baseline conservatively asks for conflict review.
+Ordinary Markdown is supported. Unsupported rich content, Obsidian-specific syntax and reference-style link definitions may block uploads to avoid data loss. Concurrent edits can require manual cleanup; this is periodic synchronization, not a shared live editor. Edits on adjacent lines (including list items and table rows) may require conflict review even if they look independent. If a write succeeds but its response is lost and the server reformats the Markdown, the plugin cannot reliably distinguish that write from another edit; it preserves both versions for review. Notes with unsaved edits in an open Markdown editor wait until those edits are saved before syncing. Recovery without a saved baseline conservatively asks for conflict review.
 
 ## Data and permissions
 
@@ -48,7 +48,7 @@ npm run type:check
 npm run build
 ```
 
-Tests use synthetic notes and a fake IndexedDB implementation. They do not contact Prismical. Real-account acceptance requires a compatible server and a disposable vault.
+Tests use synthetic notes, a fake IndexedDB implementation, and a minimal Obsidian API test double. They do not replace acceptance testing inside Obsidian. They do not contact Prismical. Real-account acceptance requires a compatible server and a disposable vault.
 
 ## Releases
 

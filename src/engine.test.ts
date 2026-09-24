@@ -176,3 +176,74 @@ describe('two-way synchronization', () => {
     expect(s.ports.putRemote).not.toHaveBeenCalled();
   });
 });
+
+it.each([false, true])('pulls remote changes while retaining blocked local edits (unsupported=%s)', async unsupported => {
+  const s = setup('A\nb\nc', 'a\nb\nC', { base: 'a\nb\nc', path: 'note.md' });
+  s.ports.getRemote = async () => ({ ...s.remote(), can_write: false, sync_problem: unsupported ? 'Unsupported block' : null });
+  await syncNote('n', s.ports);
+  expect(s.local().body).toBe('A\nb\nC');
+  expect(s.state().base).toBe('a\nb\nC');
+  await syncNote('n', s.ports);
+  expect(s.local().body).toBe('A\nb\nC');
+  expect(s.state().conflict).toBeUndefined();
+  expect(s.ports.putRemote).not.toHaveBeenCalled();
+  s.remote().body = 'a\nb\nD';
+  await syncNote('n', s.ports);
+  expect(s.local().body).toBe('A\nb\nD');
+});
+
+it('retains the warning after a pull-only update of unsupported content', async () => {
+  const s = setup('base', 'remote');
+  s.ports.getRemote = async () => ({ ...s.remote(), sync_problem: 'Unsupported block' });
+  expect(await syncNote('n', s.ports)).toBe('Unsupported block');
+  expect(s.local().body).toBe('remote');
+});
+
+it('keeps an ambiguous normalized write for review instead of guessing acknowledgement', async () => {
+  const s = setup('**local**');
+  s.ports.putRemote = vi.fn(async () => {
+    s.remote().body = '__local__';
+    s.remote().sync_revision = '2';
+    throw new GlobalSyncError('timeout');
+  });
+  await expect(syncNote('n', s.ports)).rejects.toThrow('timeout');
+  expect(await syncNote('n', s.ports)).toBe('Conflict needs review');
+  expect(s.state().conflict).toMatchObject({ local: '**local**', remote: '__local__' });
+  expect(s.state().conflict?.reason).toContain('could not be confirmed');
+  expect(s.ports.putRemote).toHaveBeenCalledTimes(1);
+  expect(s.local().body).toBe('**local**');
+});
+
+it('backs up and conditionally writes the selected local conflict version', async () => {
+  const s = setup('local', 'remote');
+  await syncNote('n', s.ports);
+  const backup = vi.fn(async () => {});
+  await resolveConflict('n', 'local', s.ports, s.state().conflict!, backup);
+  expect(backup).toHaveBeenCalledWith(expect.objectContaining({ local: 'local', remote: 'remote' }));
+  expect(s.ports.putRemote).toHaveBeenCalledWith('n', 'local', '1');
+  expect(s.state()).toEqual({ base: 'local', path: 'note.md' });
+});
+
+it('refuses a conflict write after the remote note is trashed', async () => {
+  const s = setup('local', 'remote');
+  await syncNote('n', s.ports);
+  s.remote().trashed_at = '2026-01-01';
+  const backup = vi.fn(async () => {});
+  await expect(resolveConflict('n', 'local', s.ports, s.state().conflict!, backup)).rejects.toThrow('Unavailable');
+  expect(s.ports.putRemote).not.toHaveBeenCalled();
+  expect(backup).not.toHaveBeenCalled();
+});
+
+it('preserves overlapping typing during an acknowledged merged write as a conflict', async () => {
+  const s = setup('A\nb\nc', 'a\nb\nC', { base: 'a\nb\nc', path: 'note.md' });
+  const write = s.ports.putRemote;
+  s.ports.putRemote = async (...args) => {
+    const result = await write(...args);
+    s.edit('A\nb\nTyping');
+    return result;
+  };
+  await syncNote('n', s.ports);
+  expect(await syncNote('n', s.ports)).toBe('Conflict needs review');
+  expect(s.local().body).toBe('A\nb\nTyping');
+  expect(s.state().conflict?.reason).toContain('in flight');
+});

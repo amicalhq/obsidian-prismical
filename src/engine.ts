@@ -139,7 +139,9 @@ export async function syncNote(id: string, ports: SyncPorts): Promise<string> {
         local: local.body,
         remote: remote.body,
         revision: remote.sync_revision,
-        reason: state.base === undefined ? 'No shared baseline' : 'Both sides changed',
+        reason: state.pending
+          ? 'A previous write could not be confirmed. Review both versions; server formatting may differ.'
+          : state.base === undefined ? 'No shared baseline' : 'Both sides changed',
       },
     });
     return 'Conflict needs review';
@@ -149,6 +151,10 @@ export async function syncNote(id: string, ports: SyncPorts): Promise<string> {
     return remote.sync_problem ?? 'Up to date';
   }
   if (target !== remote.body && (remote.sync_problem || !remote.can_write)) {
+    if (!ports.active()) return 'Paused';
+    if (!(await ports.replaceLocal(id, local.body, target))) return 'Local edit pending';
+    // Remote becomes the comparison baseline; local-only edits remain an unsent delta.
+    await ports.save(id, { base: remote.body, path: local.path });
     return remote.sync_problem ?? 'Read-only in Prismical; local edits retained';
   }
   if (!ports.active()) return 'Paused';
@@ -165,7 +171,7 @@ export async function syncNote(id: string, ports: SyncPorts): Promise<string> {
     return 'Local edit pending';
   }
   await ports.save(id, { base: result.body, path: local.path });
-  return 'Up to date';
+  return result.sync_problem ?? 'Up to date';
 }
 
 export async function resolveConflict(
@@ -199,6 +205,7 @@ export async function resolveConflict(
     throw new StaleConflictError();
   }
   if (!ports.active()) throw new Error('Sync is paused');
+  if (remote.trashed_at) throw new Error('Unavailable in Prismical');
   const target = choice === 'local' ? local.body : remote.body;
   if (choice === 'local' && (remote.sync_problem || !remote.can_write))
     throw new Error(remote.sync_problem ?? 'Read-only note');
