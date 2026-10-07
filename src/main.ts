@@ -145,13 +145,19 @@ export default class PrismicalSync extends Plugin {
     const api = validApi(this.settings.api);
     const key = this.app.secretStorage.getSecret(this.settings.secret);
     if (!key) throw new Error('Choose a Prismical API key in settings');
+    const syncRunId = crypto.randomUUID();
     const request = async (path: string, body?: unknown): Promise<any> => {
       if (this.stopped || generation !== this.generation || (!active() && (!review || body !== undefined)))
         throw new Error('Sync is paused or settings changed');
       const response = await requestUrl({
         url: `${api}/v1${path}`,
         method: body === undefined ? 'GET' : 'PUT',
-        headers: { Authorization: `Bearer ${key}`, 'Content-Type': 'application/json' },
+        headers: {
+          Authorization: `Bearer ${key}`, 'Content-Type': 'application/json',
+          'X-Prismical-Client': 'obsidian',
+          'X-Prismical-Client-Version': this.manifest.version,
+          'X-Prismical-Sync-Id': syncRunId,
+        },
         body: body === undefined ? undefined : JSON.stringify(body),
         throw: false,
       }).catch(error => {

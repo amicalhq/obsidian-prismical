@@ -1,6 +1,6 @@
 import { vi } from 'vitest';
 export class App {}
-export class Plugin { app: any; saveData = vi.fn(async () => {}); }
+export class Plugin { app: any; manifest = { version: '0.1.0' }; saveData = vi.fn(async () => {}); }
 export class PluginSettingTab {}
 export class SecretComponent {}
 export class Setting {}

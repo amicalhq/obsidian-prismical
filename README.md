@@ -56,6 +56,10 @@ Keep `package.json` and `manifest.json` versions aligned. Update `versions.json`
 
 See [Obsidian's publishing instructions](https://docs.obsidian.md/plugins/releasing/submit-plugin).
 
+## Server-side diagnostics
+
+Normal sync requests identify this plugin and its version and include a temporary sync-run ID. Prismical records server-side request outcomes, timing, request IDs, note IDs and authenticated account identifiers (including email) for usage measurement and troubleshooting. These sync diagnostics do not log note bodies, titles, vault paths or API keys. There is no client-side analytics SDK or separate telemetry upload. Server logs cannot confirm that a local file was written successfully. See the [Prismical privacy policy](https://prismical.ai/privacy) for data handling.
+
 ## License
 
 MIT. See [LICENSE](LICENSE). The bundled node-diff3 dependency is MIT-licensed; its copyright and license are preserved in [THIRD-PARTY-NOTICES.md](THIRD-PARTY-NOTICES.md).

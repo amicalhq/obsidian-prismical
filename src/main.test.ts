@@ -215,3 +215,18 @@ it('refuses content whose identity changes after discovery', async () => {
   s.app.vault.read.mockResolvedValueOnce(original).mockResolvedValueOnce(original.replace('"one"', '"other"'));
   await expect(ports.getLocal('one')).rejects.toThrow('properties changed during sync');
 });
+
+
+it('identifies the plugin and correlates existing API requests per sync run', async () => {
+  const s = setup();
+  const ports = await s.ports();
+  await expect(ports.getRemote('one')).rejects.toThrow();
+  const requests = vi.mocked(requestUrl).mock.calls.map(([request]) => request as { headers: Record<string, string> });
+  expect(requests).toHaveLength(2);
+  expect(requests[0].headers).toMatchObject({ 'X-Prismical-Client': 'obsidian', 'X-Prismical-Client-Version': '0.1.0' });
+  expect(requests[0].headers['X-Prismical-Sync-Id']).toMatch(/^[a-f0-9-]{36}$/);
+  expect(requests[1].headers['X-Prismical-Sync-Id']).toBe(requests[0].headers['X-Prismical-Sync-Id']);
+  await s.ports();
+  const next = vi.mocked(requestUrl).mock.calls[2][0] as { headers: Record<string, string> };
+  expect(next.headers['X-Prismical-Sync-Id']).not.toBe(requests[0].headers['X-Prismical-Sync-Id']);
+});
