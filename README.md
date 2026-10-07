@@ -35,7 +35,7 @@ Ordinary Markdown is supported. Unsupported rich content, Obsidian-specific synt
 
 The plugin sends authentication and selected note content to the configured Prismical API over HTTPS. An API key retains its account/workspace permissions; selecting note IDs does not narrow the key's permissions on the server. Only configure an API server you trust.
 
-Keys are stored through Obsidian SecretStorage, not in shared plugin settings. SecretStorage is not a guarantee of OS-keychain encryption. Device-local IndexedDB stores sync baselines and pending/conflict content; linked Markdown files and conflict backups live in your vault. Note IDs, destination folder, API origin and the secret reference are saved in plugin settings. The plugin adds no analytics and does not log note contents or API keys. Disabling or disconnecting sync does not erase existing Markdown files, conflict backups, stored checkpoints, or saved secrets.
+Keys are stored through Obsidian SecretStorage, not in shared plugin settings. SecretStorage is not a guarantee of OS-keychain encryption. Device-local IndexedDB stores sync baselines and pending/conflict content; linked Markdown files and conflict backups live in your vault. Note IDs, destination folder, API origin and the secret reference are saved in plugin settings. The plugin adds no client-side analytics and does not log note contents or API keys. Server-side request diagnostics are described below. Disabling or disconnecting sync does not erase existing Markdown files, conflict backups, stored checkpoints, or saved secrets.
 
 ## Development
 
