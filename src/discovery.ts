@@ -1,5 +1,5 @@
 import { GlobalSyncError } from './engine';
-export type Selection = { mode: 'manual' | 'all' | 'folders'; folderIds: string[]; descendants: boolean };
+export type Selection = { mode: 'all' | 'folders'; folderIds: string[]; descendants: boolean };
 export type Folder = { id: string; name: string; parent_id: string | null };
 export type Entry = { id: string; title: string; folder_id: string | null; updated_at: string; trashed_at: string | null; can_write: boolean };
 export interface DiscoveryState {

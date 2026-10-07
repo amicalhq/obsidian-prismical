@@ -1,12 +1,12 @@
-# Prismical Sync
+# Prismical
 
 Sync selected Prismical note bodies with Markdown files in Obsidian, in both directions.
 
-Desktop beta. Requires Obsidian 1.11.4 or later and a Prismical account with API access. Neither paid Obsidian Sync nor the Prismical desktop app is required. This is a source preview, not an available Community Store release. It requires compatible Prismical server support; do not treat a successful plugin build as confirmation that production sync is available.
+Desktop beta. Requires Obsidian 1.11.4 or later and a Prismical account with API access. Neither paid Obsidian Sync nor the Prismical desktop app is required. The plugin is free and open source; Prismical account and API access are subject to [Prismical pricing](https://prismical.ai/pricing). Community directory availability is separate from the GitHub release.
 
 ## Features
 
-- Choose **All notes** or one or more **Prismical folders**, optionally including subfolders. Newly created matching notes are imported automatically. Existing note-ID setups remain supported.
+- Choose **All notes** or one or more **Prismical folders**, optionally including subfolders. Newly created matching notes are imported automatically.
 - Work is processed in batches of 50 notes, without a total-note cap. Large initial imports take multiple sync cycles; the status bar shows when work remains.
 - Sync manually or every 60 seconds while Obsidian is open; also check on focus and reconnection, with at least 30 seconds between automatic runs. Manual sync bypasses that interval.
 - Merge non-overlapping edits. Review overlapping changes and save both versions before resolving.
@@ -16,7 +16,15 @@ Desktop beta. Requires Obsidian 1.11.4 or later and a Prismical account with API
 
 ## Install and connect
 
-For a local build, follow the development commands below. Copy the contents of `dist/` to `<vault>/.obsidian/plugins/prismical-sync/`, then enable **Prismical Sync** in Obsidian's Community plugins settings.
+Until the plugin is listed in Obsidian's Community directory, install it manually:
+
+1. Download `main.js` and `manifest.json` from the [latest GitHub release](https://github.com/amicalhq/obsidian-prismical/releases/latest).
+2. Create `<vault>/.obsidian/plugins/prismical-sync/` and place both files inside it. Download the license and third-party notices alongside them if you want a local copy.
+3. Reload Obsidian, enable community plugins if needed, and enable **Prismical**.
+
+For a local build, follow the development commands below and copy the contents of `dist/` into that same folder.
+
+Then connect your account:
 
 1. Create an API key in Prismical's **Settings → API & MCP**.
 2. Open the plugin settings and store/select the key through Obsidian SecretStorage.
@@ -32,7 +40,7 @@ The plugin checks changed-note metadata each sync and performs a complete pagina
 
 Leaving a selection, trashing a remote note, or losing access never deletes your local Markdown or erases its baseline. Sync pauses for that note. Bringing it back into scope resumes reconciliation; explicitly disconnected notes stay disconnected until you reconnect them. Metadata is read for accessible notes to detect moves out of selected folders; only in-scope note bodies are synchronized. This is eventual synchronization, not an instantaneous snapshot of the workspace.
 
-Existing installations keep their note-ID selection when upgrading. New installations default to All notes but stay paused until you enable syncing. Folder structure is not mirrored into Obsidian: imported files use the configured destination, and local moves/renames remain respected.
+New installations default to All notes but stay paused until you enable syncing. Folder structure is not mirrored into Obsidian: imported files use the configured destination, and local moves/renames remain respected.
 
 ## Beta limitations
 
@@ -44,7 +52,7 @@ Ordinary Markdown is supported. Unsupported rich content, Obsidian-specific synt
 
 The plugin sends authentication and selected note content to the configured Prismical API over HTTPS. An API key retains its account/workspace permissions; selecting folders or notes does not narrow the key's permissions on the server. Only configure an API server you trust.
 
-Keys are stored through Obsidian SecretStorage, not in shared plugin settings. SecretStorage is not a guarantee of OS-keychain encryption. Device-local IndexedDB stores sync baselines and pending/conflict content; linked Markdown files and conflict backups live in your vault. Selection mode, Prismical folder IDs, legacy note IDs, destination folder, API origin and the secret reference are saved in plugin settings. The plugin adds no client-side analytics and does not log note contents or API keys. Server-side request diagnostics are described below. Disabling or disconnecting sync does not erase existing Markdown files, conflict backups, stored checkpoints, or saved secrets.
+Keys are stored through Obsidian SecretStorage, not in shared plugin settings. SecretStorage is not a guarantee of OS-keychain encryption. Device-local IndexedDB stores sync baselines and pending/conflict content; linked Markdown files and conflict backups live in your vault. Selection mode, Prismical folder IDs, destination folder, API origin and the secret reference are saved in plugin settings. The plugin adds no client-side analytics and does not log note contents or API keys. Server-side request diagnostics are described below. Disabling or disconnecting sync does not erase existing Markdown files, conflict backups, stored checkpoints, or saved secrets.
 
 ## Development
 

@@ -1,9 +1,9 @@
 {
   "id": "prismical-sync",
-  "name": "Prismical Sync",
+  "name": "Prismical",
   "version": "0.1.0",
   "minAppVersion": "1.11.4",
-  "description": "Sync selected Prismical note bodies in both directions, with conflict review.",
+  "description": "Sync Prismical notes with your vault in both directions, with automatic discovery and conflict review.",
   "author": "Prismical",
   "authorUrl": "https://prismical.ai",
   "isDesktopOnly": true

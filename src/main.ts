@@ -27,17 +27,15 @@ import { discover, emptyDiscovery, inScope, listFolders, selectedFolders, type D
 interface Settings extends Selection {
   api: string;
   secret: string;
-  noteIds: string;
   folder: string;
   enabled: boolean;
 }
 const defaults: Settings = {
   api: 'https://api.prismical.ai',
   secret: '',
-  noteIds: '',
   folder: 'Prismical',
   enabled: false,
-  mode: 'manual',
+  mode: 'all',
   folderIds: [],
   descendants: true,
 };
@@ -77,7 +75,6 @@ export default class PrismicalSync extends Plugin {
   private scopeFolders = new Set<string>();
   private localSignatures = new Map<string, string>();
   private listedFolders: Folder[] = [];
-  private manualOffset = 0;
 
   private stopped = false;
   private generation = 0;
@@ -111,8 +108,16 @@ export default class PrismicalSync extends Plugin {
 
   async onload() {
     const saved = await this.loadData();
-    this.settings = { ...defaults, ...saved, mode: saved?.mode ?? (saved ? 'manual' : 'all') };
-    this.settings.enabled = this.app.loadLocalStorage('prismical-sync-enabled') === true;
+    const validMode = saved?.mode === 'all' || saved?.mode === 'folders';
+    this.settings = {
+      api: saved?.api ?? defaults.api,
+      secret: saved?.secret ?? defaults.secret,
+      folder: saved?.folder ?? defaults.folder,
+      mode: validMode ? saved.mode : defaults.mode,
+      folderIds: saved?.folderIds ?? [],
+      descendants: saved?.descendants ?? defaults.descendants,
+      enabled: validMode && this.app.loadLocalStorage('prismical-sync-enabled') === true,
+    };
     this.status = this.addStatusBarItem();
     this.status.setText('Prismical: paused');
     this.addSettingTab(new SyncSettings(this.app, this));
@@ -145,12 +150,6 @@ export default class PrismicalSync extends Plugin {
     this.app.saveLocalStorage('prismical-sync-enabled', this.settings.enabled);
     const { enabled: _enabled, ...shared } = this.settings;
     await this.saveData(shared);
-  }
-  ids() {
-    const ids = [...new Set(this.settings.noteIds.split(/[\s,]+/).filter(Boolean))];
-    if (ids.some(id => !/^[\w-]{1,160}$/.test(id)))
-      throw new Error('Enter valid note IDs');
-    return ids;
   }
   private async ports(review = false): Promise<SyncPorts> {
     const generation = this.generation;
@@ -223,7 +222,7 @@ export default class PrismicalSync extends Plugin {
       this.listedFolders = await listFolders(request);
       this.scopeFolders = selectedFolders(this.settings, this.listedFolders);
     }
-    if (this.settings.mode !== 'manual') this.discovery = await store.loadDiscovery<DiscoveryState>();
+    this.discovery = await store.loadDiscovery<DiscoveryState>();
 
     const unindexed = new Map<string, string>();
     const index = new Map<string, TFile[]>();
@@ -291,7 +290,7 @@ export default class PrismicalSync extends Plugin {
           throw error;
         }
         const note = validateNote(raw, id);
-        if (this.settings.mode !== 'manual' && !inScope({ folder_id: raw.folder_id, trashed_at: note.trashed_at }, this.settings, this.scopeFolders))
+        if (!inScope({ folder_id: raw.folder_id, trashed_at: note.trashed_at }, this.settings, this.scopeFolders))
           throw new ApiError(403, 'Outside selection or unavailable; local copy retained');
         return note;
       },
@@ -376,14 +375,7 @@ export default class PrismicalSync extends Plugin {
     this.status.setText('Prismical: syncing');
     try {
       const ports = await this.ports();
-      if (this.settings.mode === 'manual') {
-        const ids = this.ids();
-        if (this.manualOffset >= ids.length) this.manualOffset = 0;
-        await syncNotes(ids.slice(this.manualOffset, this.manualOffset + 50), ports, (id, outcome) => this.outcomes.set(id, outcome));
-        this.manualOffset = (this.manualOffset + 50) % Math.max(1, ids.length);
-      } else {
-        await this.runDiscovery(ports);
-      }
+      await this.runDiscovery(ports);
       this.failures = 0;
       const attention = [...this.outcomes.values()].some(
         value => value !== 'Up to date' && value !== 'Disconnected'
@@ -482,7 +474,7 @@ export default class PrismicalSync extends Plugin {
       const ports = await this.ports(true);
       const modal = new Modal(this.app);
       modal.setTitle('Prismical sync');
-      const ids = this.settings.mode === 'manual' ? this.ids() : Object.values(this.discovery?.entries ?? {})
+      const ids = Object.values(this.discovery?.entries ?? {})
         .filter(entry => inScope(entry, this.settings, this.scopeFolders) || this.outcomes.has(entry.id)).map(entry => entry.id);
       modal.contentEl.createEl('p', { text: `${ids.length} notes. Showing ${Math.min(offset + 1, ids.length)}–${Math.min(offset + 100, ids.length)}.` });
       for (const id of ids.slice(offset, offset + 100)) {
@@ -606,16 +598,12 @@ class SyncSettings extends PluginSettingTab {
         })
       );
     new Setting(this.containerEl).setName('Sync selection').addDropdown(dropdown =>
-      dropdown.addOption('all', 'All notes').addOption('folders', 'Selected folders').addOption('manual', 'Note IDs (existing setup)')
+      dropdown.addOption('all', 'All notes').addOption('folders', 'Selected folders')
         .setValue(this.plugin.settings.mode).onChange(async mode => {
           this.plugin.settings.mode = mode as Selection['mode'];
           await this.plugin.configure(); this.display();
         })
     );
-    if (this.plugin.settings.mode === 'manual') {
-      new Setting(this.containerEl).setName('Note IDs').setDesc('Existing note IDs, separated by commas or newlines.')
-        .addTextArea(text => text.setValue(this.plugin.settings.noteIds).onChange(value => this.plugin.queueSettings({ noteIds: value })));
-    }
     if (this.plugin.settings.mode === 'folders') {
       new Setting(this.containerEl).setName('Include subfolders').addToggle(toggle =>
         toggle.setValue(this.plugin.settings.descendants).onChange(async value => { this.plugin.settings.descendants = value; await this.plugin.configure(); }));

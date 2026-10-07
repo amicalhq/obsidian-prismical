@@ -98,12 +98,12 @@ it('imports a visible filename without title control characters', async () => {
 });
 
 it('throttles focus-triggered runs while allowing explicit manual sync', async () => {
-  vi.useFakeTimers(); const s = setup();
+  vi.useFakeTimers({ toFake: ['Date'] }); const s = setup(); discoveryApi({});
   await s.plugin.run(); await s.plugin.run();
-  expect(requestUrl).toHaveBeenCalledTimes(1);
-  await s.plugin.run(true); expect(requestUrl).toHaveBeenCalledTimes(2);
-  vi.advanceTimersByTime(30_000); await s.plugin.run();
-  expect(requestUrl).toHaveBeenCalledTimes(3);
+  expect(requestUrl).toHaveBeenCalledTimes(2);
+  await s.plugin.run(true); expect(requestUrl).toHaveBeenCalledTimes(4);
+  vi.setSystemTime(Date.now() + 30_000); await s.plugin.run();
+  expect(requestUrl).toHaveBeenCalledTimes(6);
 });
 
 it('honors retry-after on automatic runs', async () => {
@@ -116,11 +116,11 @@ it('honors retry-after on automatic runs', async () => {
 
 it('debounces draft settings and pauses new runs while typing', async () => {
   vi.useFakeTimers(); const s = setup();
-  s.plugin.queueSettings({ api: 'h' }); s.plugin.queueSettings({ api: 'https://api.prismical.ai', noteIds: 'one' });
+  s.plugin.queueSettings({ api: 'h' }); s.plugin.queueSettings({ api: 'https://api.prismical.ai', folder: 'Notes' });
   await s.plugin.run(); expect(requestUrl).not.toHaveBeenCalled();
-  expect(s.plugin.settings.noteIds).toBe('');
+  expect(s.plugin.settings.folder).toBe('Prismical');
   await vi.advanceTimersByTimeAsync(600);
-  expect(s.plugin.settings.noteIds).toBe('one');
+  expect(s.plugin.settings.folder).toBe('Notes');
   expect(s.plugin.saveData).toHaveBeenCalledTimes(1);
 });
 
