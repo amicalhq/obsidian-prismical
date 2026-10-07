@@ -230,3 +230,57 @@ it('identifies the plugin and correlates existing API requests per sync run', as
   const next = vi.mocked(requestUrl).mock.calls[2][0] as { headers: Record<string, string> };
   expect(next.headers['X-Prismical-Sync-Id']).not.toBe(requests[0].headers['X-Prismical-Sync-Id']);
 });
+
+function discoveryApi(notes: Record<string, any>, folderRows: any[] = []) {
+  vi.mocked(requestUrl).mockImplementation(((async (request: any) => {
+    const url = new URL(request.url);
+    let data: unknown;
+    if (url.pathname === '/v1/whoami') data = { org_user_id: 'user', org: { id: 'org' } };
+    else if (url.pathname === '/v1/folders') data = { results: folderRows, has_more: false };
+    else if (url.pathname === '/v1/notes') data = { results: Object.values(notes).map(n => ({ ...n, updated_at: '2026-10-07T00:00:00Z' })), has_more: false };
+    else data = notes[url.pathname.split('/')[3]];
+    return { status: data ? 200 : 404, headers: {}, text: JSON.stringify(data ?? { error: { message: 'Not found' } }) } as any;
+  }) as any));
+}
+const listedNote = (id: string, folder_id: string | null = null) => ({ id, title: id, body: 'base', folder_id, can_write: true, trashed_at: null, sync_problem: null, sync_revision: 'a'.repeat(64) });
+it('automatically imports all notes and avoids unchanged body downloads next cycle', async () => {
+  const s = setup(); s.plugin.settings.mode = 'all'; discoveryApi({ one: listedNote('one'), two: listedNote('two') });
+  await s.plugin.run(true);
+  expect(s.app.vault.create).toHaveBeenCalledTimes(2);
+  vi.mocked(requestUrl).mockClear();
+  await s.plugin.run(true);
+  expect(vi.mocked(requestUrl).mock.calls.filter(([r]) => typeof r !== 'string' && r.url.includes('include_body'))).toHaveLength(0);
+});
+it('imports only selected subtree notes without downloading unrelated bodies', async () => {
+  const s = setup(); Object.assign(s.plugin.settings, { mode: 'folders', folderIds: ['root'], descendants: true });
+  discoveryApi({ one: listedNote('one','child'), other: listedNote('other'), outside: listedNote('outside','elsewhere') },
+    [{id:'root',name:'Root',parent_id:null},{id:'child',name:'Child',parent_id:'root'}]);
+  await s.plugin.run(true);
+  expect(s.app.vault.create).toHaveBeenCalledTimes(1);
+  expect(s.app.vault.create.mock.calls[0][0]).toContain('one');
+  expect(vi.mocked(requestUrl).mock.calls.filter(([r]) => typeof r !== 'string' && r.url.includes('include_body'))).toHaveLength(1);
+});
+it('detects a folder moved into the selected subtree despite unchanged note timestamps', async () => {
+  const s = setup(); Object.assign(s.plugin.settings, { mode: 'folders', folderIds: ['root'], descendants: true });
+  const fs=[{id:'root',name:'Root',parent_id:null},{id:'child',name:'Child',parent_id:null as string|null}];
+  discoveryApi({one:listedNote('one','child')},fs);
+  await s.plugin.run(true); expect(s.app.vault.create).not.toHaveBeenCalled();
+  fs[1].parent_id='root';
+  await s.plugin.run(true); expect(s.app.vault.create).toHaveBeenCalledTimes(1);
+});
+it('preserves files and baselines when the selection changes', async () => {
+  const s=setup();s.plugin.settings.mode='all';discoveryApi({one:listedNote('one')});
+  await s.plugin.run(true);
+  const before=await (await s.ports()).load('one');
+  Object.assign(s.plugin.settings,{mode:'folders',folderIds:[]});
+  await s.plugin.configure();await s.plugin.run(true);
+  expect(await (await s.ports()).load('one')).toEqual(before);expect(s.files.size).toBe(1);
+});
+it('resumes a batch queue across plugin instances without reimporting completed files',async()=>{
+  const s=setup();s.plugin.settings.mode='all';
+  const ns=Object.fromEntries(Array.from({length:55},(_,i)=>[`n${i}`,listedNote(`n${i}`)]));discoveryApi(ns);
+  await s.plugin.run(true);expect(s.app.vault.create).toHaveBeenCalledTimes(50);
+  const next=new PrismicalSync({} as any,{} as any);next.app=s.app as any;Object.assign(next.settings,{mode:'all',enabled:true});(next as any).status={setText:vi.fn()};
+  await next.run(true);expect(s.app.vault.create).toHaveBeenCalledTimes(55);
+  expect(s.files.size).toBe(55);
+});

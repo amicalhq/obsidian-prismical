@@ -5,8 +5,10 @@ export class StateStore {
   private db: Promise<IDBDatabase>;
   constructor(namespace: string) {
     this.db = new Promise((resolve, reject) => {
-      const request = indexedDB.open(`prismical-sync:${namespace}`, 1);
-      request.onupgradeneeded = () => request.result.createObjectStore('notes');
+      const request = indexedDB.open(`prismical-sync:${namespace}`, 2);
+      request.onupgradeneeded = () => {
+        for (const name of ['notes', 'discovery']) if (!request.result.objectStoreNames.contains(name)) request.result.createObjectStore(name);
+      };
       request.onsuccess = () => resolve(request.result);
       request.onerror = () => reject(request.error);
     });
@@ -27,6 +29,24 @@ export class StateStore {
       tx.oncomplete = () => resolve();
       tx.onerror = () => reject(tx.error);
       tx.onabort = () => reject(tx.error ?? new Error('Checkpoint aborted'));
+    });
+  }
+  async loadDiscovery<T>(): Promise<T | undefined> {
+    const db = await this.db;
+    return new Promise((resolve, reject) => {
+      const request = db.transaction('discovery').objectStore('discovery').get('state');
+      request.onsuccess = () => resolve(request.result);
+      request.onerror = () => reject(request.error);
+    });
+  }
+  async saveDiscovery<T>(state: T): Promise<void> {
+    const db = await this.db;
+    return new Promise((resolve, reject) => {
+      const tx = db.transaction('discovery', 'readwrite');
+      tx.objectStore('discovery').put(state, 'state');
+      tx.oncomplete = () => resolve();
+      tx.onerror = () => reject(tx.error);
+      tx.onabort = () => reject(tx.error ?? new Error('Discovery checkpoint aborted'));
     });
   }
   async close() {

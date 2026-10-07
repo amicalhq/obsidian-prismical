@@ -15,3 +15,12 @@ it('persists an in-flight checkpoint across restart and isolates accounts', asyn
   await reopened.close();
   await other.close();
 });
+
+it('persists discovery separately from note baselines', async () => {
+  const store = new StateStore(crypto.randomUUID());
+  await store.save('one', { base: 'keep me', excluded: true });
+  await store.saveDiscovery({ scope: 'all', queue: ['one'], pass: { cursor: 'next' } });
+  expect(await store.load('one')).toEqual({ base: 'keep me', excluded: true });
+  expect(await store.loadDiscovery()).toEqual({ scope: 'all', queue: ['one'], pass: { cursor: 'next' } });
+  await store.close();
+});
