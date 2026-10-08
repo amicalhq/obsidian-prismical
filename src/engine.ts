@@ -1,5 +1,13 @@
 import { diff3Merge } from 'node-diff3';
 
+/** Shallow calendar event embedded in a note detail response. */
+export interface NoteEvent {
+  id: string | null;
+  title: string;
+  starts_at: string | null;
+  ends_at: string | null;
+  meeting_url: string | null;
+}
 export interface RemoteNote {
   id: string;
   title: string;
@@ -8,6 +16,8 @@ export interface RemoteNote {
   sync_problem: string | null;
   can_write: boolean;
   trashed_at: string | null;
+  event?: NoteEvent | null;
+  event_id?: string | null;
 }
 export interface LocalNote {
   path: string;

@@ -18,10 +18,12 @@ import {
   syncNotes,
   GlobalSyncError,
   StaleConflictError,
+  type RemoteNote,
   type SyncPorts,
 } from './engine';
 import { StateStore } from './store';
 import { validateNote } from './remote-note';
+import { meetingDetail, meetingProperties, type MeetingDetail } from './meeting';
 import { discover, emptyDiscovery, inScope, listFolders, selectedFolders, type DiscoveryState, type Folder, type Selection } from './discovery';
 
 interface Settings extends Selection {
@@ -29,12 +31,14 @@ interface Settings extends Selection {
   secret: string;
   folder: string;
   enabled: boolean;
+  includeAttendees: boolean;
 }
 const defaults: Settings = {
   api: 'https://api.prismical.ai',
   secret: '',
   folder: 'Prismical',
   enabled: false,
+  includeAttendees: false,
   mode: 'all',
   folderIds: [],
   descendants: true,
@@ -106,6 +110,27 @@ export default class PrismicalSync extends Plugin {
     );
   }
 
+  /**
+   * Fetches meeting details (attendees, location, URL) for a note's linked
+   * calendar event. Returns null when the feature is off, the note has no
+   * linked event, or the request fails, so an unavailable detail never blocks
+   * importing the note.
+   */
+  private async meetingDetails(
+    request: (path: string, body?: unknown) => Promise<unknown>,
+    note: RemoteNote,
+  ): Promise<MeetingDetail | null> {
+    if (!this.settings.includeAttendees) return null;
+    const eventId = note.event?.id ?? note.event_id ?? null;
+    if (!eventId) return null;
+    try {
+      return meetingDetail(await request(`/events/${encodeURIComponent(eventId)}`));
+    } catch (error) {
+      if (error instanceof GlobalSyncError) throw error;
+      return null;
+    }
+  }
+
   async onload() {
     const saved = await this.loadData();
     const validMode = saved?.mode === 'all' || saved?.mode === 'folders';
@@ -116,6 +141,7 @@ export default class PrismicalSync extends Plugin {
       mode: validMode ? saved.mode : defaults.mode,
       folderIds: saved?.folderIds ?? [],
       descendants: saved?.descendants ?? defaults.descendants,
+      includeAttendees: saved?.includeAttendees ?? defaults.includeAttendees,
       enabled: validMode && this.app.loadLocalStorage('prismical-sync-enabled') === true,
     };
     this.status = this.addStatusBarItem();
@@ -335,7 +361,14 @@ export default class PrismicalSync extends Plugin {
         const path = normalizePath(`${folder}/${name} - ${note.id}.md`);
         if (this.app.vault.getAbstractFileByPath(path))
           throw new Error('Import path exists; move the unrelated file first');
-        const text = `---\nprismical_note_id: ${JSON.stringify(note.id)}\nprismical_org_id: ${JSON.stringify(who.org.id)}\nprismical_api: ${JSON.stringify(api)}\nprismical_title: ${JSON.stringify(note.title)}\n---\n${note.body}`;
+        const properties = {
+          prismical_note_id: note.id,
+          prismical_org_id: who.org.id,
+          prismical_api: api,
+          prismical_title: note.title,
+          ...meetingProperties(note.event, await this.meetingDetails(request, note)),
+        };
+        const text = `---\n${Object.entries(properties).map(([key, value]) => `${key}: ${JSON.stringify(value)}`).join('\n')}\n---\n${note.body}`;
         if (!active()) throw new Error('Sync is paused');
         await this.app.vault.create(path, text);
         unindexed.set(path, text);
@@ -629,6 +662,14 @@ class SyncSettings extends PluginSettingTab {
         this.plugin.queueSettings({ folder: value });
       })
     );
+    new Setting(this.containerEl)
+      .setName('Include meeting attendees')
+      .setDesc('Fetch each meeting\u2019s attendee list and store it as the prismical_attendees property when importing notes. Each meeting needs one extra API request.')
+      .addToggle(toggle =>
+        toggle.setValue(this.plugin.settings.includeAttendees).onChange(async value => {
+          this.plugin.queueSettings({ includeAttendees: value });
+        })
+      );
     new Setting(this.containerEl)
       .addButton(button => button.setButtonText('Sync now').onClick(() => this.plugin.run(true)))
       .addButton(button => button.setButtonText('Review').onClick(() => this.plugin.review()));
