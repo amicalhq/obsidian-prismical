@@ -97,6 +97,42 @@ it('imports a visible filename without title control characters', async () => {
   expect(safeTitle('...')).toBe('Note');
 });
 
+it('writes the meeting date from the embedded event into frontmatter', async () => {
+  const s = setup();
+  await (await s.ports()).createLocal({
+    id: 'one', title: 'Standup', body: 'content',
+    event: { id: 'ev-1', title: 'Standup', starts_at: '2026-10-08T09:00:00Z', ends_at: null, meeting_url: 'https://meet/x' },
+  });
+  const [path, text] = s.app.vault.create.mock.calls[0] as [string, string];
+  expect(path).toBe('Prismical/Standup - one.md');
+  expect(text).toContain('prismical_meeting_date: "2026-10-08T09:00:00Z"');
+  expect(text).not.toContain('prismical_meeting_url');
+  expect(text).not.toContain('prismical_attendees');
+});
+
+it('fetches attendees only when the setting is enabled and the request succeeds', async () => {
+  const s = setup();
+  s.plugin.settings.includeAttendees = true;
+  const note = (body: string) => ({
+    id: 'one', title: '1:1', body,
+    event: { id: 'ev-1', title: '1:1', starts_at: '2026-10-08T09:00:00Z', ends_at: null, meeting_url: null },
+  });
+  vi.mocked(requestUrl).mockImplementation(((async (request: any) => {
+    const path = new URL(request.url).pathname;
+    if (path === '/v1/whoami') return { status: 200, headers: {}, text: JSON.stringify({ org_user_id: 'user', org: { id: 'org' } }) };
+    if (path === '/v1/events/ev-1') return { status: 200, headers: {}, text: JSON.stringify({ attendees: [{ email: 'alice@x.com', displayName: 'Alice' }, { email: 'bob@x.com' }] }) };
+    return { status: 404, headers: {}, text: '{}' };
+  }) as any));
+  const ports = await s.ports();
+  await ports.createLocal(note('content'));
+  const text = s.app.vault.create.mock.calls[0][1] as string;
+  expect(text).toContain('prismical_attendees: ["Alice","bob@x.com"]');
+  // Attendees are never requested when the feature is off.
+  s.plugin.settings.includeAttendees = false;
+  await (await s.ports()).createLocal({ id: 'two', title: 'Other', body: 'content', event: { id: 'ev-2', title: 'Other', starts_at: '2026-10-08T10:00:00Z', ends_at: null, meeting_url: null } });
+  expect((s.app.vault.create.mock.calls[1][1] as string)).not.toContain('prismical_attendees');
+});
+
 it('throttles focus-triggered runs while allowing explicit manual sync', async () => {
   vi.useFakeTimers({ toFake: ['Date'] }); const s = setup(); discoveryApi({});
   await s.plugin.run(); await s.plugin.run();
