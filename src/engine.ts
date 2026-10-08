@@ -8,6 +8,8 @@ export interface RemoteNote {
   sync_problem: string | null;
   can_write: boolean;
   trashed_at: string | null;
+  created_at: string;
+  updated_at: string;
 }
 export interface LocalNote {
   path: string;

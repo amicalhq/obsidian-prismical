@@ -27,6 +27,7 @@ function setup() {
       process: vi.fn(async (file: TFile, update: (text: string) => string) => files.set(file, update(files.get(file)!))),
       getAbstractFileByPath: (path: string) => [...files.keys()].find(file => file.path === path),
       createFolder: vi.fn(async () => {}),
+      rename: vi.fn(async (file: TFile, path: string) => { file.path = path; return file; }),
       create: vi.fn(async (path: string, text: string) => files.set(fileAt(path), text)),
     },
   };
@@ -92,9 +93,48 @@ it('preserves frontmatter when replacing a saved note', async () => {
 
 it('imports a visible filename without title control characters', async () => {
   const s = setup();
-  await (await s.ports()).createLocal({ id: 'one', title: '.hidden\n\u0000', body: 'content' });
-  expect(s.app.vault.create.mock.calls[0][0]).toBe('Prismical/hidden-- - one.md');
+  await (await s.ports()).createLocal(listedNote('one', null, '.hidden\n\u0000'));
+  expect(s.app.vault.create.mock.calls[0][0]).toBe('Prismical/hidden--.md');
   expect(safeTitle('...')).toBe('Note');
+});
+
+it('appends the note id when a different file owns the templated name', async () => {
+  const s = setup();
+  const ports = await s.ports();
+  await ports.createLocal(listedNote('a', null, 'Meeting'));
+  await ports.createLocal(listedNote('b', null, 'Meeting'));
+  const paths = [...s.files.keys()].map(f => f.path);
+  expect(paths).toContain('Prismical/Meeting.md');
+  expect(paths).toContain('Prismical/Meeting - b.md');
+  expect(s.app.vault.create).toHaveBeenCalledTimes(2);
+});
+
+it('nests date folders and renders the vault-only frontmatter once at import', async () => {
+  const s = setup();
+  Object.assign(s.plugin.settings, { dateFolderFormat: 'YYYY/Q', frontmatterTemplate: 'meeting: {created_date:YYYY-MM-DD}' });
+  const ports = await s.ports();
+  await ports.createLocal(listedNote('one', null, 'one', '2026-10-15T12:00:00Z'));
+  const [path, text] = s.app.vault.create.mock.calls[0] as [string, string];
+  expect(path).toBe('Prismical/2026/4/one.md');
+  // Identity block, a blank line, then the vault-only custom property.
+  expect(text).toBe('---\nprismical_note_id: "one"\nprismical_org_id: "org"\nprismical_api: "https://api.prismical.ai"\nprismical_title: "one"\n\nmeeting: 2026-10-15\n---\nbase');
+});
+
+it('reorganizes existing files into the date layout and skips occupied targets', async () => {
+  const s = setup(); s.plugin.settings.mode = 'all';
+  discoveryApi({ one: listedNote('one'), two: listedNote('two') });
+  await s.plugin.run(true);
+  Object.assign(s.plugin.settings, { dateFolderFormat: 'YYYY/Q' });
+  // A note whose date lands on an occupied target stays put.
+  s.files.set(fileAt('Prismical/2026/1/two.md'), 'other content');
+  s.plugin['discovery']!.entries.one.created_at = '2026-01-15T12:00:00Z';
+  s.plugin['discovery']!.entries.two.created_at = '2026-01-15T12:00:00Z';
+  await s.plugin['store']!.saveDiscovery(s.plugin['discovery']!);
+  await s.plugin.reorganize();
+  expect([...s.files.keys()].map(f => f.path)).toContain('Prismical/2026/1/one.md');
+  expect(s.app.vault.create).toHaveBeenCalledTimes(2); // only the initial import, not reorganize
+  expect((await (await s.ports()).load('one')).path).toBe('Prismical/2026/1/one.md');
+  expect((await (await s.ports()).load('two')).path).toBe('Prismical/two.md');
 });
 
 it('throttles focus-triggered runs while allowing explicit manual sync', async () => {
@@ -149,7 +189,7 @@ it.each([{}, { frontmatterPosition: { start: { line: 0 }, end: { line: 5 } } }])
     s.files.set(file, original.replace('---\nbase', 'tags: [foo\n---\nbase'));
     s.caches.set(file, cache);
     const ports = await s.ports();
-    ports.getRemote = async () => ({ id: 'one', title: 'Note', body: 'remote', sync_revision: 'a'.repeat(64), sync_problem: null, can_write: true, trashed_at: null });
+    ports.getRemote = async () => ({ id: 'one', title: 'Note', body: 'remote', sync_revision: 'a'.repeat(64), sync_problem: null, can_write: true, trashed_at: null, created_at: '2026-10-01T00:00:00Z', updated_at: '2026-10-02T00:00:00Z' });
     const baseline = { base: 'base', path: file.path };
     await ports.save('one', baseline);
     await expect(syncNote('one', ports)).rejects.toThrow('repair the YAML');
@@ -176,7 +216,7 @@ it('still disconnects after confirmed local removal', async () => {
   const s = setup(); const file = s.add('one'); s.files.delete(file);
   const ports = await s.ports();
   await ports.save('one', { base: 'base', path: file.path });
-  ports.getRemote = async () => ({ id: 'one', title: 'Note', body: 'base', sync_revision: 'a'.repeat(64), sync_problem: null, can_write: true, trashed_at: null });
+  ports.getRemote = async () => ({ id: 'one', title: 'Note', body: 'base', sync_revision: 'a'.repeat(64), sync_problem: null, can_write: true, trashed_at: null, created_at: '2026-10-01T00:00:00Z', updated_at: '2026-10-02T00:00:00Z' });
   expect(await syncNote('one', ports)).toBe('Disconnected after local removal');
 });
 
@@ -193,7 +233,7 @@ it('continues syncing healthy notes when another linked file has malformed YAML'
   const ports = await s.ports();
   await ports.save('one', { base: 'base', path: broken.path });
   await ports.save('two', { base: 'base', path: healthy.path });
-  ports.getRemote = async (id: string) => ({ id, title: 'Note', body: 'remote', sync_revision: 'a'.repeat(64), sync_problem: null, can_write: true, trashed_at: null });
+  ports.getRemote = async (id: string) => ({ id, title: 'Note', body: 'remote', sync_revision: 'a'.repeat(64), sync_problem: null, can_write: true, trashed_at: null, created_at: '2026-10-01T00:00:00Z', updated_at: '2026-10-02T00:00:00Z' });
   const report = vi.fn(); await syncNotes(['one', 'two'], ports, report);
   expect(report).toHaveBeenCalledWith('one', expect.stringContaining('repair the YAML'));
   expect(report).toHaveBeenCalledWith('two', 'Up to date');
@@ -242,7 +282,7 @@ function discoveryApi(notes: Record<string, any>, folderRows: any[] = []) {
     return { status: data ? 200 : 404, headers: {}, text: JSON.stringify(data ?? { error: { message: 'Not found' } }) } as any;
   }) as any));
 }
-const listedNote = (id: string, folder_id: string | null = null) => ({ id, title: id, body: 'base', folder_id, can_write: true, trashed_at: null, sync_problem: null, sync_revision: 'a'.repeat(64) });
+const listedNote = (id: string, folder_id: string | null = null, title = id, created_at = '2026-10-15T12:00:00Z') => ({ id, title, body: 'base', folder_id, can_write: true, trashed_at: null, sync_problem: null, sync_revision: 'a'.repeat(64), created_at, updated_at: created_at });
 it('automatically imports all notes and avoids unchanged body downloads next cycle', async () => {
   const s = setup(); s.plugin.settings.mode = 'all'; discoveryApi({ one: listedNote('one'), two: listedNote('two') });
   await s.plugin.run(true);

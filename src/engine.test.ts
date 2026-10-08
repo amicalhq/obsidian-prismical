@@ -24,6 +24,8 @@ function setup(
     sync_problem: null,
     can_write: true,
     trashed_at: null,
+    created_at: '2026-10-01T00:00:00Z',
+    updated_at: '2026-10-02T00:00:00Z',
   };
   const ports: SyncPorts = {
     active: () => true,

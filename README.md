@@ -12,7 +12,22 @@ Desktop beta. Requires Obsidian 1.11.4 or later and a Prismical account with API
 - Merge non-overlapping edits. Review overlapping changes and save both versions before resolving.
 - Retain unsent edits and recover after interrupted writes or restarts.
 - Rename and move linked files within the vault. Local deletion disconnects without deleting the remote note.
+- Arrange imported notes with custom date subfolders (for example `2026/Q4`) and filename templates.
 - Block uploads when unsupported content cannot be preserved safely.
+
+## Vault layout
+
+Imported files default to `Destination/<title>.md`; the note's unique ID lives in the frontmatter (`prismical_note_id`), not the filename, so you can leave it out of the name. Three settings change the layout, with a live preview in the settings tab:
+
+- **Date folder format** renders the note's creation date into subfolders under the destination. Tokens: `YYYY` (2026), `Q` (4), `MM`/`MMM`/`MMMM` (10/Oct/October), `DD`, and their un-padded forms; separators are literal, so `YYYY/Q` yields `2026/Q4` and `YYYY/MM/DD` yields nested date folders. Leave empty for a flat destination. Date components use your local timezone.
+- **Filename template** names the file with a template: `{title}`, `{id}`, `{created_date}`, `{updated_date}`, `{created_time}`, `{updated_time}`, `{created_datetime}`, `{updated_datetime}`; date tokens accept a format after a colon, e.g. `{created_date:YYYY/MM/DD}`. **Recurring meetings** (the same title every time, like a `1:1`) are disambiguated by leading the date in the filename: `{created_date:YYYY/MM/DD} - {title}` → `2026-10-08 - 1-1.md`. Note Obsidian forbids `/` in a filename, so `YYYY/MM/DD` in a *filename* renders as `2026-10-08`.
+- **Frontmatter template** appends extra, vault-only YAML properties to the imported note, rendered once at import. Any `key: {token}` or plain static line works, so you can add as many custom properties as you like (e.g. `source: prismical`, `project: {title}`). These lines are never sent back to Prismical and are not re-rendered on later syncs. The default adds a `created: {created_datetime}` property — the note's creation date and time, in your local timezone.
+
+The identity properties (`prismical_note_id`, `prismical_org_id`, `prismical_api`, `prismical_title`) are always written and are what link a file to its Prismical note. A blank line separates them from any custom properties, so the two read as distinct sections.
+
+Because the ID is not in the filename, two notes can share a name (for example the same recurring `1:1` on different dates, or two genuinely same-titled notes). When an import lands on a filename that is already taken by a *different* note, the plugin automatically appends the note ID to keep both — `Meeting.md` and `Meeting - <id>.md`. A name taken by an unrelated, non-linked file still halts that import with a clear error rather than overwriting.
+
+New notes follow the layout immediately. To move already imported files after a layout change, run the **Reorganize note files to the current layout** command: it renames each note to its computed path and updates the sync checkpoint. Files whose target path is already occupied are left in place and reported, and disconnected or out-of-scope notes are skipped. Renaming and moving in Obsidian is always respected; reorganization only ever moves files whose own frontmatter links them.
 
 ## Install and connect
 
