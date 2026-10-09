@@ -1,6 +1,6 @@
 import { expect, it, vi } from 'vitest';
 import { discover, emptyDiscovery, inScope, listFolders, selectedFolders, validateEntry } from './discovery';
-const note = (id: string, time = '2026-10-07T10:00:00.000Z') => ({ id, title: id, folder_id: null, updated_at: time, trashed_at: null, can_write: true });
+const note = (id: string, time = '2026-10-07T10:00:00.000Z') => ({ id, title: id, folder_id: null, updated_at: time, created_at: time, trashed_at: null, can_write: true });
 it('persists a partial inventory and resumes without dropping prior membership', async () => {
   const state = emptyDiscovery('all'); state.entries.old = note('old');
   const request = vi.fn().mockResolvedValueOnce({ results: [note('new')], has_more: true, next_cursor: 'next' });

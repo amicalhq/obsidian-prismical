@@ -1,7 +1,7 @@
 import { GlobalSyncError } from './engine';
 export type Selection = { mode: 'all' | 'folders'; folderIds: string[]; descendants: boolean };
 export type Folder = { id: string; name: string; parent_id: string | null };
-export type Entry = { id: string; title: string; folder_id: string | null; updated_at: string; trashed_at: string | null; can_write: boolean };
+export type Entry = { id: string; title: string; folder_id: string | null; created_at?: string; updated_at: string; trashed_at: string | null; can_write: boolean };
 export interface DiscoveryState {
   scope: string;
   entries: Record<string, Entry>;
@@ -24,9 +24,9 @@ export function pageRows(value: unknown): { results: unknown[]; has_more: boolea
 export function validateEntry(value: unknown): Entry {
   const n = value as Entry;
   if (!n || !safeId(n.id) || typeof n.title !== 'string' || !(n.folder_id === null || safeId(n.folder_id)) ||
-    !timestamp(n.updated_at) || !(n.trashed_at === null || timestamp(n.trashed_at)) || typeof n.can_write !== 'boolean')
+    (n.created_at !== undefined && !timestamp(n.created_at)) || !timestamp(n.updated_at) || !(n.trashed_at === null || timestamp(n.trashed_at)) || typeof n.can_write !== 'boolean')
     throw new GlobalSyncError('Invalid note listing; existing notes retained');
-  return { id: n.id, title: n.title, folder_id: n.folder_id, updated_at: n.updated_at, trashed_at: n.trashed_at, can_write: n.can_write };
+  return { id: n.id, title: n.title, folder_id: n.folder_id, created_at: n.created_at, updated_at: n.updated_at, trashed_at: n.trashed_at, can_write: n.can_write };
 }
 export async function listFolders(request: (path: string) => Promise<unknown>): Promise<Folder[]> {
   const folders = new Map<string, Folder>(); const cursors = new Set<string>(); let cursor: string | undefined;
@@ -88,7 +88,7 @@ export async function discover(state: DiscoveryState, request: (path: string) =>
     const pending = new Set(next.queue);
     for (const n of Object.values(pass.rows)) {
       const old = next.entries[n.id];
-      if (!old || old.updated_at !== n.updated_at || old.folder_id !== n.folder_id || old.can_write !== n.can_write || old.trashed_at !== n.trashed_at) pending.add(n.id);
+      if (!old || old.updated_at !== n.updated_at || (old.created_at ?? null) !== (n.created_at ?? null) || old.folder_id !== n.folder_id || old.can_write !== n.can_write || old.trashed_at !== n.trashed_at) pending.add(n.id);
     }
     // Keep missing IDs for explicit detail checks; never interpret absence as deletion.
     if (pass.full) for (const id of Object.keys(next.entries)) if (!pass.rows[id]) pending.add(id);

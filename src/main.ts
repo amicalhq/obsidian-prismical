@@ -23,22 +23,39 @@ import {
 import { StateStore } from './store';
 import { validateNote } from './remote-note';
 import { discover, emptyDiscovery, inScope, listFolders, selectedFolders, type DiscoveryState, type Folder, type Selection } from './discovery';
+import { dateFolderSegments, importPath, renderTemplate } from './paths';
+export { safeTitle } from './paths';
 
 interface Settings extends Selection {
   api: string;
   secret: string;
   folder: string;
+  dateFolderFormat: string;
+  filenameTemplate: string;
+  frontmatterTemplate: string;
   enabled: boolean;
 }
 const defaults: Settings = {
   api: 'https://api.prismical.ai',
   secret: '',
   folder: 'Prismical',
+  dateFolderFormat: '',
+  filenameTemplate: '{title}',
+  frontmatterTemplate: 'created: {created_datetime}',
   enabled: false,
   mode: 'all',
   folderIds: [],
   descendants: true,
 };
+const sampleContext = {
+  id: 'abc-123', title: 'Sample note', org: 'org', api: defaults.api,
+  created_at: '2026-10-08T12:00:00Z', updated_at: '2026-10-08T12:00:00Z',
+};
+/** A saved template that would reject every note is discarded on load. */
+function usable<T extends string>(value: unknown, check: (template: T) => void, fallback: T): T {
+  if (typeof value !== 'string') return fallback;
+  try { check(value as T); return value as T; } catch { return fallback; }
+}
 export function splitFile(text: string) {
   const match = /^---\r?\n([\s\S]*?)\r?\n---(?:\r?\n|$)/.exec(text);
   const meta = match ? parseYaml(match[1]) : {};
@@ -60,11 +77,6 @@ function validApi(value: string): string {
   )
     throw new Error('Use an HTTPS API origin without a path');
   return url.origin;
-}
-
-export function safeTitle(title: string): string {
-  return title.replace(/[\x00-\x1f\x7f\\/:*?"<>|\[\]#^]/g, '-')
-    .replace(/^[. ]+/g, '').slice(0, 80).replace(/[. ]+$/g, '') || 'Note';
 }
 
 export default class PrismicalSync extends Plugin {
@@ -113,6 +125,9 @@ export default class PrismicalSync extends Plugin {
       api: saved?.api ?? defaults.api,
       secret: saved?.secret ?? defaults.secret,
       folder: saved?.folder ?? defaults.folder,
+      dateFolderFormat: usable<string>(saved?.dateFolderFormat, t => dateFolderSegments(t, sampleContext.created_at), defaults.dateFolderFormat),
+      filenameTemplate: usable<string>(saved?.filenameTemplate, t => renderTemplate(t, sampleContext), defaults.filenameTemplate),
+      frontmatterTemplate: usable<string>(saved?.frontmatterTemplate, t => renderTemplate(t, sampleContext), defaults.frontmatterTemplate),
       mode: validMode ? saved.mode : defaults.mode,
       folderIds: saved?.folderIds ?? [],
       descendants: saved?.descendants ?? defaults.descendants,
@@ -126,6 +141,11 @@ export default class PrismicalSync extends Plugin {
       id: 'review-sync',
       name: 'Review sync status and conflicts',
       callback: () => void this.review(),
+    });
+    this.addCommand({
+      id: 'reorganize-files',
+      name: 'Reorganize note files to the current layout',
+      callback: () => void this.reorganize(),
     });
     this.registerInterval(window.setInterval(() => void this.run(), 60_000));
     this.registerDomEvent(window, 'online', () => {
@@ -322,20 +342,25 @@ export default class PrismicalSync extends Plugin {
       },
       createLocal: async note => {
         if (!active()) throw new Error('Sync is paused');
-        const folder = normalizePath(this.settings.folder.trim());
-        if (!folder || folder.split('/').some(part => part === '..' || part.startsWith('.')))
-          throw new Error('Choose a visible destination folder');
+        const layout = importPath(this.settings, {
+          id: note.id, title: note.title, org: who.org.id, api,
+          created_at: note.created_at, updated_at: note.updated_at,
+        });
         let parent = '';
-        for (const part of folder.split('/')) {
+        for (const part of layout.folder.split('/')) {
           parent = parent ? `${parent}/${part}` : part;
           if (!this.app.vault.getAbstractFileByPath(parent))
             await this.app.vault.createFolder(parent);
         }
-        const name = safeTitle(note.title);
-        const path = normalizePath(`${folder}/${name} - ${note.id}.md`);
+        let path = normalizePath(layout.path);
+        if (this.app.vault.getAbstractFileByPath(path) && !layout.name.endsWith(note.id)) {
+          // A different note already owns this templated name; keep both by appending the note ID.
+          const fallback = normalizePath(`${layout.folder}/${layout.name} - ${note.id}.md`);
+          if (!this.app.vault.getAbstractFileByPath(fallback)) path = fallback;
+        }
         if (this.app.vault.getAbstractFileByPath(path))
           throw new Error('Import path exists; move the unrelated file first');
-        const text = `---\nprismical_note_id: ${JSON.stringify(note.id)}\nprismical_org_id: ${JSON.stringify(who.org.id)}\nprismical_api: ${JSON.stringify(api)}\nprismical_title: ${JSON.stringify(note.title)}\n---\n${note.body}`;
+        const text = `---\nprismical_note_id: ${JSON.stringify(note.id)}\nprismical_org_id: ${JSON.stringify(who.org.id)}\nprismical_api: ${JSON.stringify(api)}\nprismical_title: ${JSON.stringify(note.title)}\n${layout.frontmatter}---\n${note.body}`;
         if (!active()) throw new Error('Sync is paused');
         await this.app.vault.create(path, text);
         unindexed.set(path, text);
@@ -406,6 +431,53 @@ export default class PrismicalSync extends Plugin {
       await this.ports(true);
       this.listedFolders = await listFolders(this.apiRequest!);
       return this.listedFolders;
+    } finally { this.running = false; }
+  }
+  async reorganize() {
+    if (this.running) {
+      new Notice('Wait for the current sync to finish');
+      return;
+    }
+    this.running = true;
+    const generation = this.generation;
+    try {
+      await this.ports(true);
+      const state = this.discovery;
+      if (!state) throw new Error('Sync at least once before reorganizing');
+      let moved = 0, skipped = 0, errors: string[] = [];
+      for (const entry of Object.values(state.entries)) {
+        if (generation !== this.generation) throw new Error('Settings changed; retry reorganize');
+        if (!inScope(entry, this.settings, this.scopeFolders)) continue;
+        const checkpoint = await this.store!.load(entry.id);
+        if (checkpoint.excluded) continue;
+        const file = checkpoint.path ? this.app.vault.getAbstractFileByPath(checkpoint.path) : null;
+        if (!(file instanceof TFile)) continue;
+        let layout;
+        try {
+          layout = importPath(this.settings, {
+            id: entry.id, title: entry.title, org: '', api: this.settings.api,
+            // Legacy discovery checkpoints predate created_at; fall back to updated_at.
+            created_at: entry.created_at ?? entry.updated_at, updated_at: entry.updated_at,
+          });
+        } catch (error) {
+          errors.push(`${entry.title}: ${error instanceof Error ? error.message : 'invalid layout'}`);
+          continue;
+        }
+        const target = normalizePath(layout.path);
+        if (file.path === target) continue;
+        if (this.app.vault.getAbstractFileByPath(target)) {
+          skipped++; continue;
+        }
+        await this.app.vault.createFolder(layout.folder);
+        await this.app.vault.rename(file, target);
+        await this.store!.save(entry.id, { ...checkpoint, path: target });
+        moved++;
+      }
+      const summary = `${moved} note${moved === 1 ? '' : 's'} moved${skipped ? `, ${skipped} skipped (target exists)` : ''}`;
+      new Notice(errors.length ? `${summary}; ${errors.length} failed: ${errors[0]}` : summary);
+      if (errors.length) this.status.setText(`Prismical: ${errors.length} reorganize failures`);
+    } catch (error) {
+      new Notice(error instanceof Error ? error.message : 'Reorganize failed');
     } finally { this.running = false; }
   }
   private async runDiscovery(ports: SyncPorts) {
@@ -629,8 +701,43 @@ class SyncSettings extends PluginSettingTab {
         this.plugin.queueSettings({ folder: value });
       })
     );
+    const preview = this.containerEl.createDiv();
+    preview.createEl('p', { cls: 'text-small text-muted' });
+    const showPreview = (patch: Partial<typeof this.plugin.settings>) => {
+      preview.empty();
+      const line = preview.createEl('p', { cls: 'text-small text-muted' });
+      try {
+        const layout = importPath({ ...this.plugin.settings, ...patch }, sampleContext);
+        line.setText(`Example: ${layout.path}${layout.frontmatter ? ` + frontmatter` : ''}`);
+      } catch (error) {
+        line.setText(`Invalid: ${error instanceof Error ? error.message : 'unknown error'}`);
+      }
+    };
+    new Setting(this.containerEl)
+      .setName('Date folder format')
+      .setDesc('Optional subfolders under the destination from the note creation date, e.g. YYYY or YYYY/Q for 2026/Q4. Leave empty for a flat folder.')
+      .addText(text =>
+        text.setValue(this.plugin.settings.dateFolderFormat)
+          .onChange(value => { this.plugin.queueSettings({ dateFolderFormat: value }); showPreview({ dateFolderFormat: value }); })
+      );
+    new Setting(this.containerEl)
+      .setName('Filename template')
+      .setDesc('Names the file; {title} {id} {created_date} {updated_date} {created_time} {updated_time} {created_datetime} {updated_datetime}, with a date format after a colon. For recurring meetings use {created_date:YYYY/MM/DD} - {title} so each occurrence is unique.')
+      .addText(text =>
+        text.setValue(this.plugin.settings.filenameTemplate)
+          .onChange(value => { this.plugin.queueSettings({ filenameTemplate: value }); showPreview({ filenameTemplate: value }); })
+      );
+    new Setting(this.containerEl)
+      .setName('Frontmatter template')
+      .setDesc('Extra vault-only properties, one per line, rendered once at import, e.g. created: {created_date:YYYY-MM-DD}. Add as many custom keys as you like; never sent to Prismical.')
+      .addTextArea(text =>
+        text.setPlaceholder('date: {created_date:YYYY-MM-DD}\nsource: prismical')
+          .setValue(this.plugin.settings.frontmatterTemplate)
+          .onChange(value => { this.plugin.queueSettings({ frontmatterTemplate: value }); showPreview({ frontmatterTemplate: value }); })
+      );
     new Setting(this.containerEl)
       .addButton(button => button.setButtonText('Sync now').onClick(() => this.plugin.run(true)))
-      .addButton(button => button.setButtonText('Review').onClick(() => this.plugin.review()));
+      .addButton(button => button.setButtonText('Review').onClick(() => this.plugin.review()))
+      .addButton(button => button.setButtonText('Reorganize').onClick(() => this.plugin.reorganize()));
   }
 }
